@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Chat Gemini (Proxy)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+</head>
+<body class="bg-gray-900 flex flex-col h-screen text-white">
+
+<!-- Header -->
+<header class="bg-gray-800 p-4 flex justify-between items-center shadow-md">
+  <h1 class="text-xl font-bold">💬 Chat Gemini (Proxy)</h1>
+  <button onclick="novoChat()" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded-md">Novo Chat</button>
+</header>
+
+<!-- Chat -->
+<div id="chat" class="flex-1 overflow-y-auto p-4 space-y-4 flex flex-col-reverse"></div>
+
+<!-- Input -->
+<div class="bg-gray-800 p-4 flex gap-2 items-center">
+  <input id="input" type="text" placeholder="Digite sua pergunta..." class="flex-1 p-2 rounded-lg text-black"/>
+  <input id="imagem" type="file" accept="image/*" class="text-sm text-gray-300"/>
+  <button onclick="enviar()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg font-semibold">Enviar</button>
+</div>
+
+<script>
+const PROXY_URL = "https://gemni-proxy.vercel.app/api/chat"; // <- Coloque a URL do seu proxy Vercel
+const chatContainer = document.getElementById("chat");
+let chatHistory = [];
+
+// Novo chat
+function novoChat() {
+  chatHistory = [];
+  chatContainer.innerHTML = "";
+}
+
+// Função para enviar pergunta + imagem
+async function enviar(fileFromPaste = null) {
+  const input = document.getElementById("input");
+  const fileInput = document.getElementById("imagem");
+  const pergunta = input.value.trim();
+  const file = fileFromPaste || fileInput.files[0];
+
+  if (!pergunta && !file) return alert("Envie texto ou imagem!");
+
+  // Adiciona mensagem do usuário
+  adicionarMensagem(pergunta, "user", file);
+  input.value = "";
+  fileInput.value = "";
+
+  // Prepara partes
+  let parts = [];
+  if (pergunta) parts.push({ text: pergunta });
+  if (file) {
+    const base64 = await toBase64(file);
+    if (base64) {
+      parts.push({ inline_data: { mime_type: file.type, data: base64.split(",")[1] }});
+      if (!pergunta) parts.unshift({ text: " " }); // placeholder para imagem sem texto
+    }
+  }
+
+  if (parts.length === 0) return;
+
+  // Adiciona "digitando..."
+  adicionarMensagem("⏳ Gemini está digitando...", "ia");
+
+  // Chama API via proxy
+  try {
+    const resp = await fetch(PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts }] })
+    });
+    const data = await resp.json();
+    let resposta = data?.candidates?.[0]?.content?.parts?.[0]?.text || "⚠️ Erro: resposta inválida";
+
+    // Remove "digitando..."
+    chatHistory.pop();
+    adicionarMensagem(resposta, "ia");
+
+  } catch(e) {
+    chatHistory.pop();
+    adicionarMensagem("⚠️ Erro na requisição: " + e.message, "ia");
+  }
+}
+
+// Adiciona mensagem ao chat
+function adicionarMensagem(texto, tipo, file=null) {
+  const msgDiv = document.createElement("div");
+  msgDiv.classList.add("flex", tipo==="user"?"justify-end":"justify-start");
+
+  const bubble = document.createElement("div");
+  bubble.classList.add("p-3", "rounded-xl", "max-w-[75%]", "break-words");
+  bubble.classList.add(tipo==="user"?"bg-indigo-600":"bg-gray-700");
+
+  if (file) {
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(file);
+    img.className = "mt-2 rounded-lg max-w-full max-h-64";
+    bubble.appendChild(img);
+  }
+
+  if (texto) {
+    const textoSpan = document.createElement("div");
+    textoSpan.className = "mt-1";
+    try {
+      textoSpan.innerHTML = renderMathOnlyLaTeX(markdownToHtml(texto));
+    } catch {
+      textoSpan.textContent = texto;
+    }
+    bubble.appendChild(textoSpan);
+  }
+
+  msgDiv.appendChild(bubble);
+  chatContainer.prepend(msgDiv);
+  chatHistory.push({ tipo, texto });
+}
+
+// Converte arquivo em Base64
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+  });
+}
+
+// Markdown -> HTML
+function markdownToHtml(text) {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/_(.*?)_/g, "<em>$1</em>")
+    .replace(/`(.*?)`/g, "<code>$1</code>");
+}
+
+// Renderiza LaTeX apenas nas partes delimitadas por $...$ ou $$...$$
+function renderMathOnlyLaTeX(text) {
+  return text.replace(/(\$\$.*?\$\$|\$.*?\$)/gs, (match) => {
+    try {
+      const trimmed = match.replace(/\$/g, "");
+      return katex.renderToString(trimmed, { throwOnError: false, displayMode: match.startsWith("$$") });
+    } catch {
+      return match;
+    }
+  });
+}
+
+// Suporte a colar imagens da área de transferência
+document.addEventListener('paste', async (event) => {
+  const items = event.clipboardData.items;
+  for (let item of items) {
+    if (item.type.indexOf("image") !== -1) {
+      const file = item.getAsFile();
+      if (file) {
+        enviar(file);
+      }
+    }
+  }
+});
+</script>
+</body>
+</html>
